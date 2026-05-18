@@ -760,7 +760,8 @@ let CALENDAR_STATE = {
   year: 2026,
   monthName: '',
   selectedDay: null,
-  searchFilter: ''
+  searchFilter: '',
+  employeeFilterId: null
 };
 
 window.navigateCalendarMonth = function(direction) {
@@ -801,8 +802,35 @@ window.renderCalendar = function() {
     activeMonth = sheetNames.find(n => n.toLowerCase() !== 'leave list' && STATE.data.sheets[n].rows.length > 0) || sheetNames[0];
   }
 
+  const sheet = STATE.data.sheets[activeMonth];
+  const headers = sheet ? sheet.headers : [];
+  let rows = sheet ? sheet.rows : [];
+
+  let monthlyP = 0, monthlyL = 0, monthlyA = 0, monthlyW = 0;
+
+  if (CALENDAR_STATE.employeeFilterId && headers.length) {
+    const slCol = headers[0];
+    rows = rows.filter(r => String(r[slCol] || '').trim() === String(CALENDAR_STATE.employeeFilterId));
+    
+    // Compute monthly totals for the title
+    if (rows.length > 0) {
+      const empRow = rows[0];
+      headers.slice(2).forEach(h => {
+        const val = String(empRow[h] || '').toUpperCase();
+        if (val === 'P' || val === 'PRESENT') monthlyP++;
+        else if (val === 'WFH') monthlyW++;
+        else if (val.includes('LATE') || val === 'L') monthlyL++;
+        else if (val.includes('SICK') || val === 'A' || val === 'ABSENT' || val.includes('LEAVE') || val.includes('CASUAL')) monthlyA++;
+      });
+    }
+  }
+
   CALENDAR_STATE.monthName = activeMonth;
-  monthTitle.textContent = activeMonth;
+  if (CALENDAR_STATE.employeeFilterId) {
+    monthTitle.innerHTML = `${activeMonth} — <span style="color:var(--purple);">${CALENDAR_STATE.searchFilter}</span> <span style="font-size:0.8rem; font-weight:normal; color:var(--text-muted); margin-left:0.5rem;">(Present: ${monthlyP}, Late: <span style="color:var(--yellow);">${monthlyL}</span>, Absent: <span style="color:var(--red);">${monthlyA}</span>, WFH: <span style="color:var(--purple);">${monthlyW}</span>)</span>`;
+  } else {
+    monthTitle.textContent = activeMonth;
+  }
 
   const monthNames = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
   const monthIdx = monthNames.indexOf(activeMonth);
@@ -810,10 +838,6 @@ window.renderCalendar = function() {
 
   const totalDays = new Date(year, monthIdx + 1, 0).getDate();
   const startDayOfWeek = new Date(year, monthIdx, 1).getDay();
-
-  const sheet = STATE.data.sheets[activeMonth];
-  const headers = sheet ? sheet.headers : [];
-  const rows = sheet ? sheet.rows : [];
 
   let gridHtml = '';
 
@@ -944,7 +968,10 @@ window.selectCalendarDate = function(day, headerName, skipHighlightRefresh) {
 
   const slCol = sheet.headers[0];
   const nameCol = sheet.headers[1];
-  const rows = sheet.rows;
+  let rows = sheet.rows;
+  if (CALENDAR_STATE.employeeFilterId) {
+    rows = rows.filter(r => String(r[slCol] || '').trim() === String(CALENDAR_STATE.employeeFilterId));
+  }
 
   let p = 0, l = 0, a = 0, w = 0;
   
@@ -1008,10 +1035,11 @@ window.renderCalendarLogsTable = function() {
     else if (v === 'FRIDAY' || v === 'SATURDAY') { badge = 'badge-WFH'; statusText = rawVal; }
     else if (!rawVal || rawVal === '-') { statusText = 'No Record'; badge = 'badge-L'; }
 
+    const safeName = name.replace(/'/g,'&#39;');
     return `
       <tr class="cal-log-tr">
-        <td style="padding:0.6rem 0.75rem; text-align:left;">
-          <div style="font-weight:600; color:var(--text-main); font-size:0.82rem;">${name}</div>
+        <td style="padding:0.6rem 0.75rem; text-align:left; cursor:pointer;" onclick="viewEmployeeCalendar('${id}', '${safeName}')" title="View ${name}'s Calendar">
+          <div style="font-weight:600; color:var(--purple); font-size:0.82rem; transition: color 0.2s;">${name}</div>
           <div style="font-size:0.7rem; color:var(--text-muted); margin-top:0.1rem;">ID: ${id}</div>
         </td>
         <td style="padding:0.6rem 0.75rem; text-align:right; vertical-align:middle;">
@@ -1190,22 +1218,22 @@ function _renderDirTable(page) {
     const rateW = Math.min(100, e.stats.rate);
     const safeName = e.name.replace(/'/g,'&#39;');
 
-    return `<tr class="dir-tr" onclick="viewEmployeeProfile('${e.id}','${safeName}')">
+    return `<tr class="dir-tr">
       <td class="dir-td">
-        <div class="dir-emp-cell">
+        <div class="dir-emp-cell" style="cursor:pointer;" onclick="event.stopPropagation(); viewEmployeeCalendar('${e.id}','${safeName}')" title="View ${e.name}'s Calendar">
           <div class="dir-emp-avatar ${avatarClass(e)}" style="${avatarStyle}">${avatarContent}</div>
           <div>
-            <div class="dir-emp-name">${e.name}</div>
+            <div class="dir-emp-name" style="color:var(--purple);">${e.name}</div>
             <div class="dir-emp-sub">Employee</div>
           </div>
         </div>
       </td>
-      <td class="dir-td"><span class="dir-id-badge">#${e.id}</span></td>
-      <td class="dir-td">${_statusPill(e.stats.lastStatus)}</td>
-      <td class="dir-td" style="color:var(--green); font-weight:600;">${e.stats.p}</td>
-      <td class="dir-td" style="color:var(--yellow); font-weight:600;">${e.stats.l}</td>
-      <td class="dir-td" style="color:var(--red); font-weight:600;">${e.stats.a}</td>
-      <td class="dir-td">
+      <td class="dir-td" onclick="viewEmployeeProfile('${e.id}','${safeName}')"><span class="dir-id-badge">#${e.id}</span></td>
+      <td class="dir-td" onclick="viewEmployeeProfile('${e.id}','${safeName}')">${_statusPill(e.stats.lastStatus)}</td>
+      <td class="dir-td" onclick="viewEmployeeProfile('${e.id}','${safeName}')" style="color:var(--green); font-weight:600;">${e.stats.p}</td>
+      <td class="dir-td" onclick="viewEmployeeProfile('${e.id}','${safeName}')" style="color:var(--yellow); font-weight:600;">${e.stats.l}</td>
+      <td class="dir-td" onclick="viewEmployeeProfile('${e.id}','${safeName}')" style="color:var(--red); font-weight:600;">${e.stats.a}</td>
+      <td class="dir-td" onclick="viewEmployeeProfile('${e.id}','${safeName}')">
         <div class="dir-rate-wrap">
           <div class="dir-rate-track"><div class="dir-rate-fill" style="width:${rateW}%"></div></div>
           <span class="dir-rate-text">${e.stats.rate}%</span>
@@ -1243,17 +1271,21 @@ function _renderDirGrid(page) {
       : '';
     const safeName = e.name.replace(/'/g,'&#39;');
 
-    return `<div class="dir-grid-card" onclick="viewEmployeeProfile('${e.id}','${safeName}')" style="position:relative;">
+    return `<div class="dir-grid-card" style="position:relative;">
       <button class="dir-act-btn" style="position:absolute; top:8px; right:8px; color:var(--red); border:none; background:transparent; padding:0.2rem;" onclick="event.stopPropagation(); removeEmployee('${e.id}', '${safeName}')" title="Remove Employee">
         <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
       </button>
-      <div class="dir-grid-avatar ${avatarClass(e)}" style="${avatarStyle}">${e.avatar ? '' : initials}</div>
-      <div>
-        <div class="dir-grid-name">${e.name}</div>
-        <div class="dir-grid-id">#${e.id}</div>
+      <div onclick="viewEmployeeCalendar('${e.id}','${safeName}')" style="cursor:pointer; display:flex; flex-direction:column; align-items:center; width:100%;" title="View ${e.name}'s Calendar">
+        <div class="dir-grid-avatar ${avatarClass(e)}" style="${avatarStyle}; margin-bottom:0.6rem;">${e.avatar ? '' : initials}</div>
+        <div>
+          <div class="dir-grid-name" style="color:var(--purple);">${e.name}</div>
+          <div class="dir-grid-id">#${e.id}</div>
+        </div>
       </div>
-      ${_statusPill(e.stats.lastStatus)}
-      <div style="font-size:0.72rem; color:var(--text-muted);">Rate: <span style="color:var(--purple); font-weight:600;">${e.stats.rate}%</span></div>
+      <div onclick="viewEmployeeProfile('${e.id}','${safeName}')" style="cursor:pointer; width:100%; margin-top:0.3rem;">
+        ${_statusPill(e.stats.lastStatus)}
+        <div style="font-size:0.72rem; color:var(--text-muted); margin-top:0.4rem;">Rate: <span style="color:var(--purple); font-weight:600;">${e.stats.rate}%</span></div>
+      </div>
     </div>`;
   }).join('');
 }
@@ -1350,9 +1382,28 @@ window.removeEmployee = async function(id, name) {
     DIR.allEmps = DIR.allEmps.filter(e => e.id !== id);
     _renderDirPage();
 
-    // The backend localfile/refresh will push the actual new data via WebSocket
   } catch (err) {
     alert(err.message);
   }
+};
+
+window.viewEmployeeCalendar = function(id, name) {
+  CALENDAR_STATE.employeeFilterId = id;
+  CALENDAR_STATE.searchFilter = name;
+  const searchInput = document.getElementById('cal-search-input');
+  if (searchInput) searchInput.value = name;
+  
+  switchView('calendar');
+  if (window.renderCalendar) window.renderCalendar();
+  if (window.filterCalendarDetails) window.filterCalendarDetails(name);
+};
+
+window.clearEmployeeCalendarFilter = function() {
+  CALENDAR_STATE.employeeFilterId = null;
+  CALENDAR_STATE.searchFilter = '';
+  const searchInput = document.getElementById('cal-search-input');
+  if (searchInput) searchInput.value = '';
+  if (window.renderCalendar) window.renderCalendar();
+  if (window.filterCalendarDetails) window.filterCalendarDetails('');
 };
 
