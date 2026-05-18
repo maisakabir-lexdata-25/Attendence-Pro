@@ -1,0 +1,443 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Live Sheet Viewer — Attendance Pro</title>
+  <link rel="icon" href="data:," />
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap"/>
+  <style>
+    :root {
+      --bg: #0d1117;
+      --surface: #161b22;
+      --surface2: #1c2230;
+      --border: rgba(255,255,255,0.08);
+      --purple: #8b5cf6;
+      --purple-dim: rgba(139,92,246,0.15);
+      --green: #10b981;
+      --green-dim: rgba(16,185,129,0.15);
+      --yellow: #f59e0b;
+      --yellow-dim: rgba(245,158,11,0.12);
+      --red: #ef4444;
+      --red-dim: rgba(239,68,68,0.12);
+      --blue: #3b82f6;
+      --text: #e6edf3;
+      --muted: #7d8590;
+      --radius: 10px;
+    }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: var(--bg); color: var(--text); font-family: 'Inter', sans-serif; font-size: 14px; min-height: 100vh; }
+
+    /* ── TOP BAR ── */
+    .topbar {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 0.85rem 1.5rem;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      position: sticky; top: 0; z-index: 100;
+      backdrop-filter: blur(12px);
+    }
+    .topbar-left { display: flex; align-items: center; gap: 0.75rem; }
+    .logo { width: 32px; height: 32px; background: linear-gradient(135deg, var(--purple), #6d28d9); border-radius: 8px; display: grid; place-items: center; font-weight: 700; font-size: 1rem; color: #fff; }
+    .app-name { font-weight: 700; font-size: 1.05rem; letter-spacing: -0.02em; }
+    .app-name span { color: var(--purple); }
+    .file-badge { background: var(--purple-dim); border: 1px solid rgba(139,92,246,0.3); color: var(--purple); padding: 0.2rem 0.6rem; border-radius: 20px; font-size: 0.72rem; font-weight: 600; letter-spacing: 0.02em; max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .topbar-right { display: flex; align-items: center; gap: 0.75rem; }
+    .conn-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); transition: background 0.4s; flex-shrink: 0; }
+    .conn-dot.live { background: var(--green); box-shadow: 0 0 8px var(--green); animation: pulse 2s infinite; }
+    .conn-dot.error { background: var(--red); }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.5} }
+    .conn-label { font-size: 0.72rem; color: var(--muted); }
+    .last-update { font-size: 0.72rem; color: var(--muted); }
+    .btn { padding: 0.42rem 0.9rem; border-radius: 6px; border: none; cursor: pointer; font-family: inherit; font-size: 0.8rem; font-weight: 600; transition: all 0.2s; }
+    .btn-primary { background: var(--purple); color: #fff; }
+    .btn-primary:hover { background: #7c3aed; }
+    .btn-ghost { background: transparent; color: var(--muted); border: 1px solid var(--border); }
+    .btn-ghost:hover { border-color: var(--purple); color: var(--purple); }
+
+    /* ── LOGIN OVERLAY ── */
+    #login-overlay {
+      position: fixed; inset: 0; background: rgba(13,17,23,0.92); backdrop-filter: blur(8px);
+      display: flex; align-items: center; justify-content: center; z-index: 9999;
+    }
+    .login-card { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 2.5rem; width: 360px; }
+    .login-card h2 { font-size: 1.4rem; font-weight: 700; margin-bottom: 0.3rem; }
+    .login-card p { color: var(--muted); font-size: 0.83rem; margin-bottom: 2rem; }
+    .form-group { margin-bottom: 1.2rem; }
+    .form-group label { display: block; font-size: 0.78rem; color: var(--muted); margin-bottom: 0.4rem; font-weight: 500; }
+    .form-group input { width: 100%; padding: 0.7rem 0.9rem; background: rgba(0,0,0,0.3); border: 1px solid var(--border); border-radius: 8px; color: var(--text); font-family: inherit; font-size: 0.88rem; outline: none; transition: border 0.2s; }
+    .form-group input:focus { border-color: var(--purple); }
+    .login-err { color: var(--red); font-size: 0.78rem; margin-bottom: 0.8rem; display: none; }
+    .login-btn { width: 100%; padding: 0.75rem; background: linear-gradient(135deg, var(--purple), #6d28d9); color: #fff; border: none; border-radius: 8px; font-family: inherit; font-size: 0.9rem; font-weight: 600; cursor: pointer; transition: opacity 0.2s; }
+    .login-btn:hover { opacity: 0.9; }
+
+    /* ── MAIN LAYOUT ── */
+    .layout { display: flex; height: calc(100vh - 57px); overflow: hidden; }
+
+    /* ── SIDEBAR (sheet tabs) ── */
+    .sidebar {
+      width: 200px; background: var(--surface); border-right: 1px solid var(--border);
+      display: flex; flex-direction: column; flex-shrink: 0;
+      overflow-y: auto;
+    }
+    .sidebar-header { padding: 1rem; font-size: 0.72rem; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; border-bottom: 1px solid var(--border); }
+    .sheet-tab {
+      padding: 0.65rem 1rem; cursor: pointer; font-size: 0.82rem; color: var(--muted);
+      border-left: 3px solid transparent; transition: all 0.15s; display: flex; align-items: center; gap: 0.5rem;
+    }
+    .sheet-tab:hover { color: var(--text); background: rgba(255,255,255,0.03); }
+    .sheet-tab.active { color: var(--purple); border-left-color: var(--purple); background: var(--purple-dim); }
+    .sheet-tab .changed-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--yellow); flex-shrink: 0; display: none; }
+    .sheet-tab.changed .changed-dot { display: block; }
+
+    /* ── CONTENT ── */
+    .content { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+
+    /* ── STATS BAR ── */
+    .stats-bar { display: flex; align-items: center; gap: 1.5rem; padding: 0.7rem 1.5rem; background: var(--surface); border-bottom: 1px solid var(--border); flex-shrink: 0; }
+    .stat-chip { display: flex; align-items: center; gap: 0.4rem; font-size: 0.78rem; color: var(--muted); }
+    .stat-chip strong { color: var(--text); font-weight: 600; }
+    .search-wrap { margin-left: auto; display: flex; align-items: center; gap: 0.5rem; }
+    .search-input { padding: 0.35rem 0.8rem; background: rgba(0,0,0,0.3); border: 1px solid var(--border); border-radius: 6px; color: var(--text); font-family: inherit; font-size: 0.78rem; outline: none; width: 200px; transition: border 0.2s; }
+    .search-input:focus { border-color: var(--purple); }
+
+    /* ── TABLE AREA ── */
+    .table-wrap { flex: 1; overflow: auto; padding: 1rem 1.5rem 2rem; }
+    .sheet-title { font-size: 1.1rem; font-weight: 700; margin-bottom: 0.75rem; display: flex; align-items: center; gap: 0.5rem; }
+    .sheet-title .change-badge { font-size: 0.7rem; padding: 0.15rem 0.5rem; border-radius: 12px; background: var(--yellow-dim); color: var(--yellow); font-weight: 600; border: 1px solid rgba(245,158,11,0.3); }
+
+    table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+    thead th {
+      position: sticky; top: 0; z-index: 2;
+      background: var(--surface2); color: var(--muted);
+      font-size: 0.7rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em;
+      padding: 0.6rem 0.9rem; text-align: left; border-bottom: 1px solid var(--border); white-space: nowrap;
+    }
+    thead th:first-child { width: 48px; text-align: center; color: rgba(255,255,255,0.25); }
+    tbody tr { border-bottom: 1px solid rgba(255,255,255,0.04); transition: background 0.15s; }
+    tbody tr:hover { background: rgba(255,255,255,0.025); }
+    tbody td { padding: 0.5rem 0.9rem; color: var(--text); white-space: nowrap; max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
+    tbody td:first-child { text-align: center; color: var(--muted); font-size: 0.72rem; }
+    tbody tr.row-updated { animation: flash-updated 1.5s ease-out; }
+    tbody tr.row-added   { animation: flash-added   1.5s ease-out; }
+    @keyframes flash-updated { 0%{background:rgba(245,158,11,0.25)} 100%{background:transparent} }
+    @keyframes flash-added   { 0%{background:rgba(16,185,129,0.25)} 100%{background:transparent} }
+
+    /* ── EMPTY / LOADING ── */
+    .placeholder { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 300px; color: var(--muted); gap: 0.75rem; }
+    .placeholder svg { opacity: 0.25; }
+    .placeholder p { font-size: 0.85rem; }
+    .spinner { width: 36px; height: 36px; border: 3px solid var(--border); border-top-color: var(--purple); border-radius: 50%; animation: spin 0.8s linear infinite; }
+    @keyframes spin { to{transform:rotate(360deg)} }
+
+    /* ── CHANGE LOG TOAST ── */
+    #toast-container { position: fixed; bottom: 1.5rem; right: 1.5rem; display: flex; flex-direction: column; gap: 0.5rem; z-index: 5000; }
+    .toast {
+      background: var(--surface2); border: 1px solid var(--border); border-radius: 10px;
+      padding: 0.75rem 1rem; min-width: 280px; max-width: 360px;
+      display: flex; align-items: flex-start; gap: 0.65rem;
+      animation: slideIn 0.3s ease; box-shadow: 0 8px 30px rgba(0,0,0,0.5);
+    }
+    .toast.change { border-left: 3px solid var(--yellow); }
+    .toast.refresh { border-left: 3px solid var(--green); }
+    .toast-icon { font-size: 1.1rem; flex-shrink: 0; margin-top: 0.05rem; }
+    .toast-body p { font-size: 0.78rem; color: var(--muted); margin-top: 0.15rem; }
+    .toast-title { font-size: 0.85rem; font-weight: 600; color: var(--text); }
+    @keyframes slideIn { from{transform:translateX(120%);opacity:0} to{transform:translateX(0);opacity:1} }
+
+    /* ── SCROLLBAR ── */
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.2); }
+  </style>
+</head>
+<body>
+
+<!-- LOGIN OVERLAY -->
+<div id="login-overlay">
+  <div class="login-card">
+    <h2>Sign In</h2>
+    <p>Access your live Excel dashboard</p>
+    <div id="login-err" class="login-err"></div>
+    <div class="form-group">
+      <label>Email</label>
+      <input type="email" id="login-email" value="admin@example.com" autocomplete="username"/>
+    </div>
+    <div class="form-group">
+      <label>Password</label>
+      <input type="password" id="login-pass" value="admin123" autocomplete="current-password"/>
+    </div>
+    <button class="login-btn" id="login-btn" onclick="doLogin()">Sign In →</button>
+  </div>
+</div>
+
+<!-- TOP BAR -->
+<div class="topbar">
+  <div class="topbar-left">
+    <div class="logo">A</div>
+    <div class="app-name">Attendance <span>Pro</span></div>
+    <div class="file-badge" id="file-badge">⏳ Connecting…</div>
+  </div>
+  <div class="topbar-right">
+    <div class="conn-dot" id="conn-dot"></div>
+    <span class="conn-label" id="conn-label">Disconnected</span>
+    <span class="last-update" id="last-update"></span>
+    <button class="btn btn-ghost" onclick="forceRefresh()">⟳ Refresh</button>
+    <button class="btn btn-primary" onclick="location.href='index.html'">← Dashboard</button>
+  </div>
+</div>
+
+<!-- MAIN -->
+<div class="layout">
+  <div class="sidebar">
+    <div class="sidebar-header">📋 Sheets</div>
+    <div id="sheet-tabs"></div>
+  </div>
+  <div class="content">
+    <!-- Stats Bar -->
+    <div class="stats-bar">
+      <div class="stat-chip">Rows: <strong id="stat-rows">—</strong></div>
+      <div class="stat-chip">Cols: <strong id="stat-cols">—</strong></div>
+      <div class="stat-chip">Fetched: <strong id="stat-time">—</strong></div>
+      <div class="search-wrap">
+        <input type="text" id="search-input" class="search-input" placeholder="🔍 Search rows…" oninput="filterTable(this.value)"/>
+      </div>
+    </div>
+    <!-- Table -->
+    <div class="table-wrap" id="table-wrap">
+      <div class="placeholder">
+        <div class="spinner"></div>
+        <p>Loading live sheet data…</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="toast-container"></div>
+
+<script>
+const API = 'http://localhost:3000';
+let token = null;
+let ws = null;
+let allSheetsData = {};
+let activeSheet = null;
+let allRows = [];       // full unfiltered rows of active sheet
+let allHeaders = [];    // headers of active sheet
+let changedSheets = new Set();
+
+/* ── HELPERS ── */
+function fmtTime(iso) {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+}
+function toast(type, title, body) {
+  const el = document.createElement('div');
+  el.className = `toast ${type}`;
+  el.innerHTML = `<div class="toast-icon">${type === 'change' ? '⚡' : '🔄'}</div>
+    <div class="toast-body"><div class="toast-title">${title}</div><p>${body}</p></div>`;
+  document.getElementById('toast-container').prepend(el);
+  setTimeout(() => el.remove(), 5000);
+}
+
+/* ── LOGIN ── */
+async function doLogin() {
+  const email    = document.getElementById('login-email').value.trim();
+  const password = document.getElementById('login-pass').value;
+  const errEl    = document.getElementById('login-err');
+  const btn      = document.getElementById('login-btn');
+  errEl.style.display = 'none';
+  btn.textContent = 'Signing in…'; btn.disabled = true;
+  try {
+    const r = await fetch(`${API}/api/auth/login`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password }),
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || 'Login failed');
+    token = d.token;
+    document.getElementById('login-overlay').style.display = 'none';
+    init();
+  } catch (e) {
+    errEl.textContent = e.message; errEl.style.display = 'block';
+    btn.textContent = 'Sign In →'; btn.disabled = false;
+  }
+}
+document.getElementById('login-pass').addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
+
+/* ── INIT ── */
+async function init() {
+  connectWS();
+  await loadData();
+}
+
+/* ── WEBSOCKET ── */
+function connectWS() {
+  const dot   = document.getElementById('conn-dot');
+  const label = document.getElementById('conn-label');
+  ws = new WebSocket(`ws://localhost:3000?token=${token}`);
+
+  ws.onopen = () => {
+    dot.className = 'conn-dot live';
+    label.textContent = 'Live';
+  };
+  ws.onclose = () => {
+    dot.className = 'conn-dot error';
+    label.textContent = 'Disconnected';
+    setTimeout(connectWS, 5000);
+  };
+  ws.onerror = () => { dot.className = 'conn-dot error'; };
+
+  ws.onmessage = e => {
+    const msg = JSON.parse(e.data);
+    handleWS(msg);
+  };
+}
+
+function handleWS(msg) {
+  if (msg.type === 'LOCAL_FILE_REFRESH') {
+    document.getElementById('last-update').textContent = `↻ ${fmtTime(msg.payload.fetchedAt)}`;
+    // Re-fetch data silently
+    loadData(true);
+  }
+  if (msg.type === 'LOCAL_FILE_CHANGE') {
+    const names = msg.payload.changes.map(c => c.sheet).join(', ');
+    toast('change', 'Sheet Updated', `Changes detected in: ${names}`);
+    msg.payload.changes.forEach(c => changedSheets.add(c.sheet));
+    updateSheetTabBadges();
+    loadData(true);
+  }
+}
+
+/* ── LOAD DATA ── */
+async function loadData(silent = false) {
+  try {
+    const r = await fetch(`${API}/api/localfile`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!r.ok) {
+      const err = await r.json();
+      showError(err.error || 'Failed to load file');
+      return;
+    }
+    const data = await r.json();
+    allSheetsData = data.sheets || {};
+    document.getElementById('file-badge').textContent = `📄 ${data.fileName}`;
+    document.getElementById('stat-time').textContent = fmtTime(data.fetchedAt);
+
+    renderSheetTabs(Object.keys(allSheetsData));
+
+    if (!activeSheet || !allSheetsData[activeSheet]) {
+      activeSheet = Object.keys(allSheetsData)[0] || null;
+    }
+    if (activeSheet) renderSheet(activeSheet, silent);
+
+  } catch (e) {
+    showError('Cannot reach server. Is the backend running on port 3000?');
+  }
+}
+
+/* ── SHEET TABS ── */
+function renderSheetTabs(names) {
+  const container = document.getElementById('sheet-tabs');
+  container.innerHTML = '';
+  names.forEach(name => {
+    const div = document.createElement('div');
+    div.className = `sheet-tab${name === activeSheet ? ' active' : ''}${changedSheets.has(name) ? ' changed' : ''}`;
+    div.dataset.sheet = name;
+    div.innerHTML = `<div class="changed-dot"></div>${escHtml(name)}`;
+    div.onclick = () => selectSheet(name);
+    container.appendChild(div);
+  });
+}
+function updateSheetTabBadges() {
+  document.querySelectorAll('.sheet-tab').forEach(el => {
+    const n = el.dataset.sheet;
+    el.classList.toggle('changed', changedSheets.has(n));
+  });
+}
+function selectSheet(name) {
+  activeSheet = name;
+  changedSheets.delete(name);
+  document.getElementById('search-input').value = '';
+  renderSheetTabs(Object.keys(allSheetsData));
+  renderSheet(name);
+}
+
+/* ── RENDER SHEET TABLE ── */
+function renderSheet(name, isUpdate = false) {
+  const s = allSheetsData[name];
+  if (!s) return;
+
+  allHeaders = s.headers;
+  allRows    = s.rows;
+
+  document.getElementById('stat-rows').textContent = allRows.length.toLocaleString();
+  document.getElementById('stat-cols').textContent = allHeaders.length.toLocaleString();
+
+  const wrap = document.getElementById('table-wrap');
+
+  if (!allHeaders.length && !allRows.length) {
+    wrap.innerHTML = `<div class="sheet-title">${escHtml(name)}</div>
+      <div class="placeholder"><svg width="48" height="48" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-width="1.5" d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg><p>This sheet is empty</p></div>`;
+    return;
+  }
+
+  const badge = changedSheets.has(name) ? `<span class="change-badge">⚡ Updated</span>` : '';
+  let html = `<div class="sheet-title">${escHtml(name)} ${badge}</div><table><thead><tr><th>#</th>${allHeaders.map(h => `<th>${escHtml(h)}</th>`).join('')}</tr></thead><tbody>`;
+  allRows.forEach((row, i) => {
+    html += `<tr data-ri="${i}"><td>${row._rowIndex || i + 1}</td>${allHeaders.map(h => `<td title="${escHtml(String(row[h] ?? ''))}">${escHtml(String(row[h] ?? ''))}</td>`).join('')}</tr>`;
+  });
+  html += '</tbody></table>';
+  wrap.innerHTML = html;
+
+  // Flash rows if update
+  if (isUpdate) {
+    wrap.querySelectorAll('tbody tr').forEach(tr => {
+      tr.classList.add('row-updated');
+      setTimeout(() => tr.classList.remove('row-updated'), 1600);
+    });
+  }
+}
+
+/* ── SEARCH / FILTER ── */
+function filterTable(q) {
+  const query = q.toLowerCase();
+  const rows  = document.querySelectorAll('#table-wrap tbody tr');
+  rows.forEach(tr => {
+    tr.style.display = !query || tr.textContent.toLowerCase().includes(query) ? '' : 'none';
+  });
+}
+
+/* ── FORCE REFRESH ── */
+async function forceRefresh() {
+  try {
+    await fetch(`${API}/api/localfile/refresh`, {
+      method: 'POST', headers: { Authorization: `Bearer ${token}` },
+    });
+    toast('refresh', 'Refresh Triggered', 'Server re-reading the Excel file…');
+    await loadData();
+  } catch { toast('change', 'Error', 'Could not reach server.'); }
+}
+
+/* ── ERROR STATE ── */
+function showError(msg) {
+  document.getElementById('file-badge').textContent = '⚠ Not Connected';
+  document.getElementById('table-wrap').innerHTML = `
+    <div class="placeholder">
+      <svg width="48" height="48" fill="none" stroke="currentColor" viewBox="0 0 24 24" style="color:var(--red)">
+        <path stroke-width="1.5" d="M12 9v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+      </svg>
+      <p style="color:var(--red)">${escHtml(msg)}</p>
+      <button class="btn btn-primary" onclick="loadData()">Retry</button>
+    </div>`;
+}
+
+function escHtml(str) {
+  return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+</script>
+</body>
+</html>
