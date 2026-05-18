@@ -562,6 +562,131 @@ app.post('/api/localfile/refresh', authMiddleware, adminOnly, (req, res) => {
 });
 
 /* ══════════════════════════════════════
+   EMPLOYEE WRITE-BACK ENDPOINTS
+══════════════════════════════════════ */
+
+/**
+ * POST /api/localfile/employee
+ * Body: { name: string }
+ * Adds a new employee row (next SL, given Name, blank attendance) to every
+ * month sheet in the Excel file, then saves + reloads.
+ */
+app.post('/api/localfile/employee', authMiddleware, (req, res) => {
+  try {
+    const { name } = req.body;
+    if (!name || !name.trim()) return res.status(400).json({ error: 'Employee name is required.' });
+    if (!fs.existsSync(LOCAL_FILE_PATH)) return res.status(404).json({ error: 'Excel file not found on disk.' });
+
+    const fileBuffer = fs.readFileSync(LOCAL_FILE_PATH);
+    const workbook   = XLSX.read(fileBuffer, { type: 'buffer', cellStyles: true });
+
+    let newId = 1;
+
+    // Find the highest existing SL across all sheets
+    workbook.SheetNames.forEach(sheetName => {
+      const ws = workbook.Sheets[sheetName];
+      const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '', raw: false });
+      if (rows.length <= 1) return;
+      rows.slice(1).forEach(row => {
+        const sl = parseInt(row[0], 10);
+        if (!isNaN(sl) && sl >= newId) newId = sl + 1;
+      });
+    });
+
+    // Append the new employee row to every month sheet (skip non-attendance sheets)
+    workbook.SheetNames.forEach(sheetName => {
+      const low = sheetName.toLowerCase();
+      if (low.includes('fingerprint') || low === 'leave list') return;
+
+      const ws = workbook.Sheets[sheetName];
+      const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '', raw: false });
+      if (!rows.length) return;
+
+      // New row: [SL, Name, blank for each date column]
+      const colCount = rows[0].length;
+      const newRow   = [newId, name.trim(), ...Array(Math.max(0, colCount - 2)).fill('')];
+      rows.push(newRow);
+
+      // Write back to the sheet
+      const newWs = XLSX.utils.aoa_to_sheet(rows);
+      workbook.Sheets[sheetName] = newWs;
+    });
+
+    // Save file
+    XLSX.writeFile(workbook, LOCAL_FILE_PATH);
+    console.log(`[LocalFile] ➕ Employee added: "${name.trim()}" (ID: ${newId})`);
+
+    // Reload and broadcast
+    setTimeout(() => loadAndBroadcastLocalFile(LOCAL_FILE_PATH), 500);
+
+    res.json({ message: 'Employee added successfully', id: newId, name: name.trim() });
+  } catch (err) {
+    console.error('[LocalFile] Add employee error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * DELETE /api/localfile/employee/:id
+ * Removes the employee with the given SL number from every month sheet.
+ */
+app.delete('/api/localfile/employee/:id', authMiddleware, (req, res) => {
+  try {
+    const targetId = String(req.params.id).trim();
+    if (!targetId) return res.status(400).json({ error: 'Employee ID is required.' });
+    if (!fs.existsSync(LOCAL_FILE_PATH)) return res.status(404).json({ error: 'Excel file not found on disk.' });
+
+    const fileBuffer = fs.readFileSync(LOCAL_FILE_PATH);
+    const workbook   = XLSX.read(fileBuffer, { type: 'buffer', cellStyles: true });
+
+    let removedName = '';
+    let removedCount = 0;
+
+    workbook.SheetNames.forEach(sheetName => {
+      const low = sheetName.toLowerCase();
+      if (low.includes('fingerprint') || low === 'leave list') return;
+
+      const ws   = workbook.Sheets[sheetName];
+      const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '', raw: false });
+      if (rows.length <= 1) return;
+
+      const header    = rows[0];
+      const dataRows  = rows.slice(1);
+      const filtered  = dataRows.filter(row => {
+        const sl = String(row[0] || '').trim();
+        if (sl === targetId) {
+          if (!removedName) removedName = String(row[1] || '').trim();
+          removedCount++;
+          return false; // remove this row
+        }
+        return true;
+      });
+
+      const newWs = XLSX.utils.aoa_to_sheet([header, ...filtered]);
+      workbook.Sheets[sheetName] = newWs;
+    });
+
+    if (removedCount === 0) {
+      return res.status(404).json({ error: `Employee with ID ${targetId} not found in any sheet.` });
+    }
+
+    // Save file
+    XLSX.writeFile(workbook, LOCAL_FILE_PATH);
+    console.log(`[LocalFile] 🗑️  Employee removed: ID ${targetId} "${removedName}" (from ${removedCount} sheet(s))`);
+
+    // Reload and broadcast
+    setTimeout(() => loadAndBroadcastLocalFile(LOCAL_FILE_PATH), 500);
+
+    res.json({ message: 'Employee removed successfully', id: targetId, name: removedName });
+  } catch (err) {
+    console.error('[LocalFile] Remove employee error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+
+
+/* ══════════════════════════════════════
    START
 ══════════════════════════════════════ */
 server.listen(PORT, () => {

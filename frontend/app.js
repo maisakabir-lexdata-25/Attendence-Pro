@@ -5,7 +5,12 @@ function switchView(viewId) {
   const viewEl = document.getElementById(`view-${viewId}`);
   if (viewEl) viewEl.classList.add('active');
 
-  const navItem = Array.from(document.querySelectorAll('.nav-item')).find(el => el.innerText.trim().toLowerCase() === viewId.toLowerCase() || (viewId === 'profile' && el.innerText.trim() === 'Employees') || (viewId === 'general-settings' && el.innerText.trim() === 'Settings'));
+  const navItem = Array.from(document.querySelectorAll('.nav-item')).find(el => {
+    const txt = el.innerText.trim().toLowerCase();
+    return txt === viewId.toLowerCase() ||
+      ((viewId === 'profile' || viewId === 'emp-directory') && txt === 'employees') ||
+      (viewId === 'general-settings' && txt === 'settings');
+  });
   if (navItem) {
     navItem.classList.add('active');
     if (viewId === 'settings' || viewId === 'general-settings') {
@@ -24,12 +29,17 @@ function switchView(viewId) {
     'attendance': 'Employee Attendance',
     'analytics': 'Analytics Overview',
     'profile': 'Employee Profile & Details',
+    'emp-directory': 'Employees',
     'calendar': 'Calendar Module',
     'settings': 'Settings / Roles & Permissions',
     'general-settings': 'Settings / General Settings'
   };
   const titleEl = document.getElementById('view-title');
   if (titleEl) titleEl.innerText = titles[viewId] || 'Attendance Pro';
+
+  if (viewId === 'emp-directory') {
+    renderEmpDirectory();
+  }
 }
 
 // Mock data removed. UI will populate dynamically via renderDynamicData.
@@ -345,6 +355,10 @@ function renderLocalDashboard(data) {
     viewEmployeeProfile(STATE.currentProfile.sl, STATE.currentProfile.name, true);
   }
   renderEmployeeList();
+  if (window.renderCalendar) window.renderCalendar();
+  // Keep directory KPI cards live
+  const dirView = document.getElementById('view-emp-directory');
+  if (dirView && dirView.classList.contains('active')) renderEmpDirectory();
 }
 
 function renderMatrix(sheet, monthName) {
@@ -740,3 +754,605 @@ window.removeAvatar = function() {
 
   renderEmployeeList();
 };
+
+/* ── Calendar Module Logic ── */
+let CALENDAR_STATE = {
+  year: 2026,
+  monthName: '',
+  selectedDay: null,
+  searchFilter: ''
+};
+
+window.navigateCalendarMonth = function(direction) {
+  if (!STATE.data || !STATE.data.sheets) return;
+  const sheetNames = Object.keys(STATE.data.sheets).filter(n => {
+    const low = n.toLowerCase();
+    return !low.includes('fingerprint') && low !== 'leave list';
+  });
+
+  const ds = document.querySelector('.date-selector');
+  if (!ds) return;
+
+  const currentIdx = sheetNames.indexOf(ds.value);
+  if (currentIdx === -1) return;
+
+  let newIdx = currentIdx + direction;
+  if (newIdx < 0) newIdx = sheetNames.length - 1;
+  if (newIdx >= sheetNames.length) newIdx = 0;
+
+  ds.value = sheetNames[newIdx];
+  renderLocalDashboard(STATE.data);
+};
+
+window.renderCalendar = function() {
+  const grid = document.getElementById('calendar-days-grid');
+  const monthTitle = document.getElementById('cal-month-title');
+  if (!grid || !monthTitle) return;
+
+  if (!STATE.data || !STATE.data.sheets) {
+    grid.innerHTML = '<div style="grid-column: span 7; text-align:center; color:var(--text-muted); padding:3rem 0;">Upload a sheet to view calendar</div>';
+    return;
+  }
+
+  const sheetNames = Object.keys(STATE.data.sheets);
+  const ds = document.querySelector('.date-selector');
+  let activeMonth = ds ? ds.value : '';
+  if (!sheetNames.includes(activeMonth)) {
+    activeMonth = sheetNames.find(n => n.toLowerCase() !== 'leave list' && STATE.data.sheets[n].rows.length > 0) || sheetNames[0];
+  }
+
+  CALENDAR_STATE.monthName = activeMonth;
+  monthTitle.textContent = activeMonth;
+
+  const monthNames = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+  const monthIdx = monthNames.indexOf(activeMonth);
+  const year = CALENDAR_STATE.year;
+
+  const totalDays = new Date(year, monthIdx + 1, 0).getDate();
+  const startDayOfWeek = new Date(year, monthIdx, 1).getDay();
+
+  const sheet = STATE.data.sheets[activeMonth];
+  const headers = sheet ? sheet.headers : [];
+  const rows = sheet ? sheet.rows : [];
+
+  let gridHtml = '';
+
+  for (let i = 0; i < startDayOfWeek; i++) {
+    gridHtml += `<div class="cal-day-cell outside"></div>`;
+  }
+
+  let matchedFirstDayHeader = null;
+  
+  const findDateHeaderStr = (day) => {
+    const dayStr = String(day);
+    const monthShort = activeMonth.substring(0, 3).toLowerCase();
+    const monthNum = String(monthIdx + 1);
+    const monthNumPad = monthNum.padStart(2, '0');
+    const dayPad = dayStr.padStart(2, '0');
+
+    return headers.find(h => {
+      const low = String(h).toLowerCase();
+      return (
+        low === `${dayStr}-${monthShort}` ||
+        low === `${dayPad}-${monthShort}` ||
+        low === `${dayStr}/${monthNum}` ||
+        low === `${dayPad}/${monthNumPad}` ||
+        low.includes(`${dayStr}-${monthShort}`) ||
+        low.includes(`${dayPad}-${monthShort}`) ||
+        low.includes(`${dayStr}/${monthNum}`) ||
+        low.includes(`${dayPad}/${monthNumPad}`) ||
+        low === dayStr ||
+        low === dayPad
+      );
+    });
+  };
+
+  for (let day = 1; day <= totalDays; day++) {
+    const dayOfWeek = (startDayOfWeek + day - 1) % 7;
+    const isWeekend = dayOfWeek === 5 || dayOfWeek === 6;
+    
+    const dateHeader = findDateHeaderStr(day);
+    
+    let p = 0, l = 0, a = 0, w = 0;
+    let hasRecord = false;
+    
+    if (dateHeader && rows.length > 0) {
+      hasRecord = true;
+      rows.forEach(r => {
+        const val = String(r[dateHeader] || '').toUpperCase();
+        if (val === 'P' || val === 'PRESENT') p++;
+        else if (val === 'WFH') w++;
+        else if (val.includes('LATE') || val === 'L') l++;
+        else if (val.includes('SICK') || val === 'A' || val === 'ABSENT' || val.includes('LEAVE') || val.includes('CASUAL')) a++;
+      });
+    }
+
+    const weekendClass = isWeekend ? ' weekend' : '';
+    const activeClass = CALENDAR_STATE.selectedDay && CALENDAR_STATE.selectedDay.day === day ? ' active' : '';
+
+    if (day === 1 && dateHeader) {
+      matchedFirstDayHeader = dateHeader;
+    }
+
+    let dotsHtml = '';
+    if (hasRecord && (p > 0 || l > 0 || a > 0 || w > 0)) {
+      if (p > 0) dotsHtml += `<span class="cal-dot cal-dot-p" title="${p} Present"></span>`;
+      if (l > 0) dotsHtml += `<span class="cal-dot cal-dot-l" title="${l} Late"></span>`;
+      if (a > 0) dotsHtml += `<span class="cal-dot cal-dot-a" title="${a} Absent/Leave"></span>`;
+      if (w > 0) dotsHtml += `<span class="cal-dot cal-dot-w" title="${w} WFH"></span>`;
+    }
+
+    gridHtml += `
+      <div class="cal-day-cell${weekendClass}${activeClass}" onclick="selectCalendarDate(${day}, '${dateHeader || ''}')">
+        <div class="cal-day-num">${day}</div>
+        <div class="cal-day-dots">
+          ${dotsHtml}
+        </div>
+      </div>
+    `;
+  }
+
+  const totalCells = startDayOfWeek + totalDays;
+  const remaining = (7 - (totalCells % 7)) % 7;
+  for (let i = 0; i < remaining; i++) {
+    gridHtml += `<div class="cal-day-cell outside"></div>`;
+  }
+
+  grid.innerHTML = gridHtml;
+
+  if (!CALENDAR_STATE.selectedDay || CALENDAR_STATE.selectedDay.month !== activeMonth) {
+    if (matchedFirstDayHeader) {
+      selectCalendarDate(1, matchedFirstDayHeader);
+    } else {
+      selectCalendarDate(1, '');
+    }
+  } else {
+    selectCalendarDate(CALENDAR_STATE.selectedDay.day, CALENDAR_STATE.selectedDay.headerName, true);
+  }
+};
+
+window.selectCalendarDate = function(day, headerName, skipHighlightRefresh) {
+  CALENDAR_STATE.selectedDay = { day, headerName, month: CALENDAR_STATE.monthName };
+
+  if (!skipHighlightRefresh) {
+    document.querySelectorAll('#calendar-days-grid .cal-day-cell').forEach((cell, index) => {
+      const startDayOfWeek = new Date(CALENDAR_STATE.year, ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"].indexOf(CALENDAR_STATE.monthName), 1).getDay();
+      const cellDay = index + 1 - startDayOfWeek;
+      cell.classList.toggle('active', cellDay === day);
+    });
+  }
+
+  const detailTitle = document.getElementById('cal-detail-title');
+  const detailSubtitle = document.getElementById('cal-detail-subtitle');
+  if (detailTitle) detailTitle.textContent = `${day} ${CALENDAR_STATE.monthName}`;
+  if (detailSubtitle) detailSubtitle.textContent = `Attendance record for ${CALENDAR_STATE.monthName} ${day}, ${CALENDAR_STATE.year}`;
+
+  const setVal = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+  
+  if (!headerName || !STATE.data || !STATE.data.sheets) {
+    setVal('cal-stat-p', '0');
+    setVal('cal-stat-l', '0');
+    setVal('cal-stat-a', '0');
+    setVal('cal-stat-w', '0');
+    const tbody = document.getElementById('calendar-details-tbody');
+    if (tbody) tbody.innerHTML = `<tr><td colspan="2" style="text-align:center; color:var(--text-muted); padding:3rem 0; font-size:0.82rem;">No attendance records found for this date.</td></tr>`;
+    return;
+  }
+
+  const sheet = STATE.data.sheets[CALENDAR_STATE.monthName];
+  if (!sheet) return;
+
+  const slCol = sheet.headers[0];
+  const nameCol = sheet.headers[1];
+  const rows = sheet.rows;
+
+  let p = 0, l = 0, a = 0, w = 0;
+  
+  rows.forEach(r => {
+    const val = String(r[headerName] || '').toUpperCase();
+    if (val === 'P' || val === 'PRESENT') p++;
+    else if (val === 'WFH') w++;
+    else if (val.includes('LATE') || val === 'L') l++;
+    else if (val.includes('SICK') || val === 'A' || val === 'ABSENT' || val.includes('LEAVE') || val.includes('CASUAL')) a++;
+  });
+
+  setVal('cal-stat-p', p);
+  setVal('cal-stat-l', l);
+  setVal('cal-stat-a', a);
+  setVal('cal-stat-w', w);
+
+  window.renderCalendarLogsTable();
+};
+
+window.filterCalendarDetails = function(val) {
+  CALENDAR_STATE.searchFilter = val;
+  window.renderCalendarLogsTable();
+};
+
+window.renderCalendarLogsTable = function() {
+  const tbody = document.getElementById('calendar-details-tbody');
+  if (!tbody) return;
+
+  const { monthName, selectedDay } = CALENDAR_STATE;
+  if (!selectedDay || !selectedDay.headerName || !STATE.data || !STATE.data.sheets) return;
+
+  const sheet = STATE.data.sheets[monthName];
+  if (!sheet) return;
+
+  const slCol = sheet.headers[0];
+  const nameCol = sheet.headers[1];
+  let rows = sheet.rows;
+
+  if (CALENDAR_STATE.searchFilter) {
+    const q = CALENDAR_STATE.searchFilter.toLowerCase();
+    rows = rows.filter(r => String(r[nameCol] || '').toLowerCase().includes(q) || String(r[slCol] || '').toLowerCase().includes(q));
+  }
+
+  if (rows.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="2" style="text-align:center; color:var(--text-muted); padding:3rem 0; font-size:0.82rem;">No matching logs found.</td></tr>`;
+    return;
+  }
+
+  tbody.innerHTML = rows.map(r => {
+    const rawVal = r[selectedDay.headerName] || '';
+    const v = String(rawVal).toUpperCase();
+    const id = r[slCol] || '';
+    const name = r[nameCol] || '';
+
+    let badge = 'badge-A';
+    let statusText = rawVal || 'Absent';
+    
+    if (v === 'P' || v === 'PRESENT') { badge = 'badge-P'; statusText = 'Present'; }
+    else if (v === 'WFH') { badge = 'badge-WFH'; statusText = 'WFH'; }
+    else if (v.includes('LATE') || v === 'L') { badge = 'badge-L'; statusText = rawVal; }
+    else if (v === 'FRIDAY' || v === 'SATURDAY') { badge = 'badge-WFH'; statusText = rawVal; }
+    else if (!rawVal || rawVal === '-') { statusText = 'No Record'; badge = 'badge-L'; }
+
+    return `
+      <tr class="cal-log-tr">
+        <td style="padding:0.6rem 0.75rem; text-align:left;">
+          <div style="font-weight:600; color:var(--text-main); font-size:0.82rem;">${name}</div>
+          <div style="font-size:0.7rem; color:var(--text-muted); margin-top:0.1rem;">ID: ${id}</div>
+        </td>
+        <td style="padding:0.6rem 0.75rem; text-align:right; vertical-align:middle;">
+          <span class="badge ${badge}" style="font-size:0.72rem; padding:0.18rem 0.5rem; border-radius:5px; box-shadow:none;">${statusText}</span>
+        </td>
+      </tr>
+    `;
+  }).join('');
+};
+
+/* ─────────────────────────────────────
+   EMPLOYEE DIRECTORY MODULE
+───────────────────────────────────── */
+const DIR = {
+  page: 1,
+  pageSize: 10,
+  filter: '',
+  view: 'list',   // 'list' | 'grid'
+  allEmps: []
+};
+
+function getDirSheet() {
+  if (!STATE.data || !STATE.data.sheets) return null;
+  const ds = document.querySelector('.date-selector');
+  let active = ds ? ds.value : '';
+  const names = Object.keys(STATE.data.sheets);
+  if (!names.includes(active)) {
+    active = names.find(n => n.toLowerCase() !== 'leave list' && STATE.data.sheets[n].rows.length > 0) || names[0];
+  }
+  return { sheet: STATE.data.sheets[active], monthName: active };
+}
+
+function calcEmpStats(row, headers) {
+  let p = 0, l = 0, a = 0, wfh = 0, total = 0, lastStatus = '';
+  headers.slice(2).forEach(h => {
+    const raw = row[h] || '';
+    const v = String(raw).toUpperCase();
+    if (!v || v === 'FRIDAY' || v === 'SATURDAY') return;
+    total++;
+    if      (v === 'P' || v === 'PRESENT')                                    { p++;   lastStatus = 'present'; }
+    else if (v === 'WFH')                                                      { wfh++; lastStatus = 'wfh'; }
+    else if (v.includes('LATE') || v === 'L')                                  { l++;   lastStatus = 'late'; }
+    else if (v.includes('SICK')||v==='A'||v==='ABSENT'||v.includes('LEAVE')||v.includes('CASUAL')) { a++; lastStatus = 'absent'; }
+    else total--;
+  });
+  const rate = total > 0 ? Math.round((p + wfh) / total * 100) : 0;
+  return { p, l, a, wfh, total, rate, lastStatus };
+}
+
+function renderEmpDirectory() {
+  const res = getDirSheet();
+  if (!res || !res.sheet || !res.sheet.rows.length) {
+    document.getElementById('dir-emp-tbody').innerHTML =
+      '<tr><td colspan="8" class="dir-empty-cell">Upload a sheet to view employees.</td></tr>';
+    ['dir-stat-total','dir-stat-present','dir-stat-leave','dir-stat-absent','dir-stat-wfh','dir-table-count']
+      .forEach(id => { const el = document.getElementById(id); if (el) el.textContent = '—'; });
+    document.getElementById('dir-page-info').textContent = 'Showing 0–0 of 0 employees';
+    document.getElementById('dir-page-nums').innerHTML = '';
+    return;
+  }
+
+  const { sheet, monthName } = res;
+  const slCol   = sheet.headers[0];
+  const nameCol = sheet.headers[1];
+
+  // Build employee list with stats
+  DIR.allEmps = sheet.rows
+    .filter(r => r[nameCol] && String(r[nameCol]).trim())
+    .map(r => ({
+      id:   String(r[slCol]   || ''),
+      name: String(r[nameCol] || ''),
+      stats: calcEmpStats(r, sheet.headers),
+      avatar: localStorage.getItem('avatar-' + String(r[slCol] || ''))
+    }));
+
+  // KPI aggregates
+  let kpiP = 0, kpiL = 0, kpiA = 0, kpiW = 0;
+  DIR.allEmps.forEach(e => {
+    if (e.stats.lastStatus === 'present') kpiP++;
+    else if (e.stats.lastStatus === 'late') kpiL++;
+    else if (e.stats.lastStatus === 'absent') kpiA++;
+    else if (e.stats.lastStatus === 'wfh') kpiW++;
+  });
+  const sv = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+  sv('dir-stat-total',   DIR.allEmps.length);
+  sv('dir-stat-present', kpiP);
+  sv('dir-stat-leave',   kpiA);   // Absent/Leave combined in KPI
+  sv('dir-stat-absent',  kpiL);   // Late shown as "Absent Today" KPI slot
+  sv('dir-stat-wfh',     kpiW);
+
+  _renderDirPage();
+}
+
+function _renderDirPage() {
+  // Filter
+  const q = DIR.filter.toLowerCase();
+  const filtered = DIR.allEmps.filter(e =>
+    !q || e.name.toLowerCase().includes(q) || e.id.includes(q)
+  );
+
+  const total = filtered.length;
+  const totalPages = Math.max(1, Math.ceil(total / DIR.pageSize));
+  if (DIR.page > totalPages) DIR.page = totalPages;
+
+  const start = (DIR.page - 1) * DIR.pageSize;
+  const end   = Math.min(start + DIR.pageSize, total);
+  const page  = filtered.slice(start, end);
+
+  document.getElementById('dir-table-count').textContent = total;
+  document.getElementById('dir-page-info').textContent =
+    total === 0 ? 'No employees found' : `Showing ${start + 1}–${end} of ${total} employees`;
+
+  // Render page numbers
+  const numsEl = document.getElementById('dir-page-nums');
+  let numsHtml = '';
+  const maxShow = 5;
+  let startPage = Math.max(1, DIR.page - Math.floor(maxShow / 2));
+  let endPage   = Math.min(totalPages, startPage + maxShow - 1);
+  if (endPage - startPage < maxShow - 1) startPage = Math.max(1, endPage - maxShow + 1);
+  for (let i = startPage; i <= endPage; i++) {
+    numsHtml += `<button class="dir-page-num${i === DIR.page ? ' active' : ''}" onclick="dirGoToPage(${i})">${i}</button>`;
+  }
+  numsEl.innerHTML = numsHtml;
+
+  const prevBtn = document.getElementById('dir-prev-btn');
+  const nextBtn = document.getElementById('dir-next-btn');
+  if (prevBtn) prevBtn.disabled = DIR.page <= 1;
+  if (nextBtn) nextBtn.disabled = DIR.page >= totalPages;
+
+  if (DIR.view === 'grid') {
+    _renderDirGrid(page);
+  } else {
+    _renderDirTable(page);
+  }
+}
+
+const AVATAR_GRADS = ['g0','g1','g2','g3','g4','g5','g6','g7'];
+
+function _getAvatarGrad(id) {
+  const n = parseInt(id, 10) || 0;
+  return AVATAR_GRADS[n % AVATAR_GRADS.length];
+}
+
+function _statusPill(status) {
+  const map = {
+    present: ['dir-pill-present', 'Present'],
+    late:    ['dir-pill-late',    'Late'],
+    absent:  ['dir-pill-absent',  'Absent'],
+    wfh:     ['dir-pill-wfh',     'WFH'],
+  };
+  const [cls, label] = map[status] || ['dir-pill-none', 'No Record'];
+  return `<span class="dir-pill ${cls}">${label}</span>`;
+}
+
+function _renderDirTable(page) {
+  const wrap = document.getElementById('dir-table-wrap');
+  const grid = document.getElementById('dir-emp-grid');
+  if (wrap) wrap.style.display = 'block';
+  if (grid) grid.style.display = 'none';
+
+  const tbody = document.getElementById('dir-emp-tbody');
+  if (!tbody) return;
+
+  if (!page.length) {
+    tbody.innerHTML = '<tr><td colspan="8" class="dir-empty-cell">No employees match your search.</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = page.map(e => {
+    const initials  = e.name.split(' ').slice(0,2).map(w => w[0]||'').join('').toUpperCase();
+    const gradClass = 'dir-avatar-' + _getAvatarGrad(e.id);
+    const avatarStyle = e.avatar
+      ? `background-image:url(${e.avatar}); background-size:cover; background-position:center; color:transparent;`
+      : '';
+    const avatarContent = e.avatar ? '' : initials;
+    const rateW = Math.min(100, e.stats.rate);
+    const safeName = e.name.replace(/'/g,'&#39;');
+
+    return `<tr class="dir-tr" onclick="viewEmployeeProfile('${e.id}','${safeName}')">
+      <td class="dir-td">
+        <div class="dir-emp-cell">
+          <div class="dir-emp-avatar ${avatarClass(e)}" style="${avatarStyle}">${avatarContent}</div>
+          <div>
+            <div class="dir-emp-name">${e.name}</div>
+            <div class="dir-emp-sub">Employee</div>
+          </div>
+        </div>
+      </td>
+      <td class="dir-td"><span class="dir-id-badge">#${e.id}</span></td>
+      <td class="dir-td">${_statusPill(e.stats.lastStatus)}</td>
+      <td class="dir-td" style="color:var(--green); font-weight:600;">${e.stats.p}</td>
+      <td class="dir-td" style="color:var(--yellow); font-weight:600;">${e.stats.l}</td>
+      <td class="dir-td" style="color:var(--red); font-weight:600;">${e.stats.a}</td>
+      <td class="dir-td">
+        <div class="dir-rate-wrap">
+          <div class="dir-rate-track"><div class="dir-rate-fill" style="width:${rateW}%"></div></div>
+          <span class="dir-rate-text">${e.stats.rate}%</span>
+        </div>
+      </td>
+      <td class="dir-td">
+        <div class="dir-actions">
+          <button class="dir-act-btn dir-act-btn-view" onclick="event.stopPropagation(); viewEmployeeProfile('${e.id}','${safeName}')">View</button>
+          <button class="dir-act-btn" style="color:var(--red); border-color:rgba(239,68,68,0.3);" onclick="event.stopPropagation(); removeEmployee('${e.id}', '${safeName}')">Remove</button>
+        </div>
+      </td>
+    </tr>`;
+  }).join('');
+}
+
+function avatarClass(e) {
+  return e.avatar ? '' : 'dir-avatar-' + _getAvatarGrad(e.id);
+}
+
+function _renderDirGrid(page) {
+  const wrap = document.getElementById('dir-table-wrap');
+  const grid = document.getElementById('dir-emp-grid');
+  if (wrap) wrap.style.display = 'none';
+  if (grid) grid.style.display = 'grid';
+
+  if (!page.length) {
+    grid.innerHTML = '<div style="grid-column:1/-1; text-align:center; color:var(--text-muted); padding:3rem;">No employees match.</div>';
+    return;
+  }
+
+  grid.innerHTML = page.map(e => {
+    const initials = e.name.split(' ').slice(0,2).map(w=>w[0]||'').join('').toUpperCase();
+    const avatarStyle = e.avatar
+      ? `background-image:url(${e.avatar}); background-size:cover; background-position:center; color:transparent;`
+      : '';
+    const safeName = e.name.replace(/'/g,'&#39;');
+
+    return `<div class="dir-grid-card" onclick="viewEmployeeProfile('${e.id}','${safeName}')" style="position:relative;">
+      <button class="dir-act-btn" style="position:absolute; top:8px; right:8px; color:var(--red); border:none; background:transparent; padding:0.2rem;" onclick="event.stopPropagation(); removeEmployee('${e.id}', '${safeName}')" title="Remove Employee">
+        <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+      </button>
+      <div class="dir-grid-avatar ${avatarClass(e)}" style="${avatarStyle}">${e.avatar ? '' : initials}</div>
+      <div>
+        <div class="dir-grid-name">${e.name}</div>
+        <div class="dir-grid-id">#${e.id}</div>
+      </div>
+      ${_statusPill(e.stats.lastStatus)}
+      <div style="font-size:0.72rem; color:var(--text-muted);">Rate: <span style="color:var(--purple); font-weight:600;">${e.stats.rate}%</span></div>
+    </div>`;
+  }).join('');
+}
+
+window.filterEmpDirectory = function(val) {
+  DIR.filter = val;
+  DIR.page   = 1;
+  _renderDirPage();
+};
+
+window.dirChangePage = function(delta) {
+  DIR.page += delta;
+  _renderDirPage();
+};
+
+window.dirGoToPage = function(n) {
+  DIR.page = n;
+  _renderDirPage();
+};
+
+window.dirSetPageSize = function(val) {
+  DIR.pageSize = parseInt(val, 10);
+  DIR.page     = 1;
+  _renderDirPage();
+};
+
+window.setDirView = function(mode) {
+  DIR.view = mode;
+  document.getElementById('dir-toggle-list')?.classList.toggle('active', mode === 'list');
+  document.getElementById('dir-toggle-grid')?.classList.toggle('active', mode === 'grid');
+  _renderDirPage();
+};
+
+/* ─────────────────────────────────────
+   ADD / REMOVE EMPLOYEE API CALLS
+───────────────────────────────────── */
+
+window.showAddEmployeeModal = function() {
+  document.getElementById('add-emp-name').value = '';
+  document.getElementById('add-emp-modal').style.display = 'flex';
+};
+
+window.hideAddEmployeeModal = function() {
+  document.getElementById('add-emp-modal').style.display = 'none';
+};
+
+window.submitAddEmployee = async function() {
+  const name = document.getElementById('add-emp-name').value.trim();
+  if (!name) return alert('Please enter the employee name.');
+
+  const btn = document.querySelector('#add-emp-modal .btn-primary');
+  const ogText = btn.innerText;
+  btn.innerText = 'Adding...';
+  btn.disabled = true;
+
+  try {
+    const res = await fetch('http://localhost:3000/api/localfile/employee', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name })
+    });
+    const data = await res.json();
+    
+    if (!res.ok) throw new Error(data.error || 'Failed to add employee');
+    
+    hideAddEmployeeModal();
+    // Re-trigger a fetch to get the updated data via standard pipeline
+    setTimeout(() => {
+      fetch('http://localhost:3000/api/localfile/refresh', { method: 'POST' })
+        .catch(console.error);
+    }, 600);
+  } catch (err) {
+    alert(err.message);
+  } finally {
+    btn.innerText = ogText;
+    btn.disabled = false;
+  }
+};
+
+window.removeEmployee = async function(id, name) {
+  if (!confirm(`Are you sure you want to completely remove ${name} (#${id}) from ALL sheets? This cannot be undone.`)) {
+    return;
+  }
+
+  try {
+    const res = await fetch(`http://localhost:3000/api/localfile/employee/${id}`, {
+      method: 'DELETE'
+    });
+    const data = await res.json();
+
+    if (!res.ok) throw new Error(data.error || 'Failed to remove employee');
+
+    // Remove from UI immediately to feel snappy
+    DIR.allEmps = DIR.allEmps.filter(e => e.id !== id);
+    _renderDirPage();
+
+    // The backend localfile/refresh will push the actual new data via WebSocket
+  } catch (err) {
+    alert(err.message);
+  }
+};
+
