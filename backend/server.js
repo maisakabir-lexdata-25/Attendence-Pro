@@ -63,14 +63,19 @@ if (fs.existsSync(FRONTEND_DIR)) {
 ══════════════════════════════════════ */
 const USERS = [
   {
-    id: 1, name: 'Admin User', email: 'admin@example.com',
+    id: 1, name: 'Super Admin', email: 'superadmin@example.com',
+    password: '$2a$10$WISgkzGnvzoe9UXF2d0AneqBTUS5Q7QGGIGtXCOqVtfNrncl2SwLq', // admin123
+    role: 'superadmin', avatar: 'SA',
+  },
+  {
+    id: 2, name: 'Admin & Team Supervisor', email: 'admin@example.com',
     password: '$2a$10$WISgkzGnvzoe9UXF2d0AneqBTUS5Q7QGGIGtXCOqVtfNrncl2SwLq', // admin123
     role: 'admin', avatar: 'AU',
   },
   {
-    id: 2, name: 'Regular User', email: 'user@example.com',
+    id: 3, name: 'Employee User', email: 'employee@example.com',
     password: '$2a$10$jA/80t58plx9Xav8zaNpg.yh4ElBX53IblFIkEdlDClzt8.gz3Lgu', // user123
-    role: 'user', avatar: 'RU',
+    role: 'employee', avatar: 'EU',
   },
 ];
 
@@ -680,6 +685,69 @@ app.delete('/api/localfile/employee/:id', authMiddleware, (req, res) => {
     res.json({ message: 'Employee removed successfully', id: targetId, name: removedName });
   } catch (err) {
     console.error('[LocalFile] Remove employee error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * PUT /api/localfile/employee/:id
+ * Updates the employee's name in every month sheet in the Excel file.
+ */
+app.put('/api/localfile/employee/:id', authMiddleware, (req, res) => {
+  try {
+    const targetId = String(req.params.id).trim();
+    const { name } = req.body;
+    if (!targetId) return res.status(400).json({ error: 'Employee ID is required.' });
+    if (!name || !name.trim()) return res.status(400).json({ error: 'Employee name is required.' });
+    if (!fs.existsSync(LOCAL_FILE_PATH)) return res.status(404).json({ error: 'Excel file not found on disk.' });
+
+    const fileBuffer = fs.readFileSync(LOCAL_FILE_PATH);
+    const workbook   = XLSX.read(fileBuffer, { type: 'buffer', cellStyles: true });
+
+    let updatedCount = 0;
+
+    workbook.SheetNames.forEach(sheetName => {
+      const low = sheetName.toLowerCase();
+      if (low.includes('fingerprint') || low === 'leave list') return;
+
+      const ws   = workbook.Sheets[sheetName];
+      const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '', raw: false });
+      if (rows.length <= 1) return;
+
+      const header    = rows[0];
+      const dataRows  = rows.slice(1);
+      
+      let modified = false;
+      const updated = dataRows.map(row => {
+        const sl = String(row[0] || '').trim();
+        if (sl === targetId) {
+          row[1] = name.trim();
+          updatedCount++;
+          modified = true;
+        }
+        return row;
+      });
+
+      if (modified) {
+        const newWs = XLSX.utils.aoa_to_sheet([header, ...updated]);
+        workbook.Sheets[sheetName] = newWs;
+      }
+    });
+
+    if (updatedCount === 0) {
+      return res.status(404).json({ error: `Employee with ID ${targetId} not found in any sheet.` });
+    }
+
+    // Save file
+    XLSX.writeFile(workbook, LOCAL_FILE_PATH);
+    console.log(`[LocalFile] ✏️  Employee updated: ID ${targetId} -> "${name.trim()}"`);
+
+    // Reload and broadcast
+    setTimeout(() => loadAndBroadcastLocalFile(LOCAL_FILE_PATH), 500);
+
+    res.json({ message: 'Employee updated successfully', id: targetId, name: name.trim() });
+  } catch (err) {
+    console.error('[LocalFile] Update employee error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });

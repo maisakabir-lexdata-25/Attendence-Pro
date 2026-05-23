@@ -28,7 +28,7 @@ function switchView(viewId) {
     'dashboard': 'Attendance Dashboard',
     'attendance': 'Employee Attendance',
     'analytics': 'Analytics Overview',
-    'profile': 'Employee Profile & Details',
+    'profile': 'Employees',
     'emp-directory': 'Employees',
     'calendar': 'Calendar Module',
     'settings': 'Settings / Roles & Permissions',
@@ -39,6 +39,8 @@ function switchView(viewId) {
 
   if (viewId === 'emp-directory') {
     renderEmpDirectory();
+  } else if (viewId === 'calendar') {
+    if (window.renderCalendar) window.renderCalendar();
   }
 }
 
@@ -201,6 +203,84 @@ async function refreshLocalData() {
   }
 }
 
+/* ── Toast notification helper ── */
+function showToast(message, type = 'success') {
+  const toast = document.getElementById('refresh-toast');
+  if (!toast) return;
+  const colors = {
+    success: { bg: 'rgba(34,197,94,0.15)', border: 'rgba(34,197,94,0.35)', color: '#22C55E' },
+    error:   { bg: 'rgba(239,68,68,0.15)', border: 'rgba(239,68,68,0.35)',  color: '#EF4444' },
+    info:    { bg: 'rgba(139,92,246,0.15)', border: 'rgba(139,92,246,0.35)', color: '#8B5CF6' }
+  };
+  const c = colors[type] || colors.info;
+  const icon = type === 'success'
+    ? '<svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/></svg>'
+    : type === 'error'
+    ? '<svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>'
+    : '<svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>';
+
+  toast.style.cssText = `position:fixed;bottom:2rem;right:2rem;z-index:9999;padding:0.75rem 1.25rem;border-radius:10px;font-size:0.85rem;font-weight:600;display:flex;align-items:center;gap:0.5rem;backdrop-filter:blur(12px);box-shadow:0 8px 32px rgba(0,0,0,0.35);border:1px solid ${c.border};background:${c.bg};color:${c.color};opacity:0;transform:translateY(10px);transition:opacity 0.3s ease,transform 0.3s ease;`;
+  toast.innerHTML = icon + message;
+
+  // Animate in
+  requestAnimationFrame(() => {
+    toast.style.opacity = '1';
+    toast.style.transform = 'translateY(0)';
+  });
+
+  // Auto-hide after 3 seconds
+  clearTimeout(toast._hideTimer);
+  toast._hideTimer = setTimeout(() => {
+    toast.style.opacity = '0';
+    toast.style.transform = 'translateY(10px)';
+    setTimeout(() => { toast.style.display = 'none'; }, 300);
+  }, 3000);
+}
+
+/* ── Refresh Dashboard ── */
+window.refreshDashboard = async function() {
+  const btn  = document.getElementById('refresh-btn');
+  const icon = document.getElementById('refresh-icon');
+  if (!btn || btn.disabled) return;
+
+  // Spin the icon and disable button
+  btn.disabled = true;
+  btn.style.opacity = '0.7';
+  if (icon) {
+    icon.style.transition = 'transform 0.8s ease';
+    icon.style.transform  = 'rotate(360deg)';
+  }
+
+  showToast('Refreshing data…', 'info');
+
+  try {
+    // Ask backend to force-reread the Excel file
+    await apiFetch('/api/localfile/refresh', 'POST');
+    // Pull the freshly parsed data
+    await refreshLocalData();
+    showToast('✓ Data refreshed successfully!', 'success');
+  } catch (err) {
+    console.warn('Refresh failed:', err.message);
+    // If the local file endpoint fails, try the cached data
+    try {
+      await refreshLocalData();
+      showToast('✓ Data reloaded from cache.', 'success');
+    } catch (e) {
+      showToast('⚠ Could not refresh data.', 'error');
+    }
+  } finally {
+    // Re-enable button, reset icon after spin completes
+    setTimeout(() => {
+      btn.disabled = false;
+      btn.style.opacity = '1';
+      if (icon) {
+        icon.style.transition = 'none';
+        icon.style.transform  = 'rotate(0deg)';
+      }
+    }, 900);
+  }
+};
+
 async function refreshData(sheetId, range = 'Sheet1') {
   try {
     const data = await apiFetch(`/api/sheets/data?sheetId=${encodeURIComponent(sheetId)}&range=${encodeURIComponent(range)}`);
@@ -218,8 +298,40 @@ async function refreshData(sheetId, range = 'Sheet1') {
 
 async function initRealtime() {
   try {
-    const loginRes = await apiFetch('/api/auth/login', 'POST', { email: 'admin@example.com', password: 'admin123' });
-    STATE.token = loginRes.token;
+    // Read auth from localStorage
+    const storedToken = localStorage.getItem('token');
+    const storedUser = localStorage.getItem('user');
+    
+    if (!storedToken) {
+      window.location.href = 'index.html';
+      return;
+    }
+    
+    STATE.token = storedToken;
+    let userRole = 'employee';
+    try {
+       const u = JSON.parse(storedUser);
+       userRole = u.role;
+       
+       // Update UI with user info
+       const userProfileName = document.querySelector('.user-profile-sm .font-weight-600') || document.querySelector('.user-profile-sm div[style*="font-weight:600"]');
+       const userProfileEmail = document.querySelector('.user-profile-sm .text-muted') || document.querySelector('.user-profile-sm div[style*="var(--text-muted)"]');
+       const userProfileAvatar = document.querySelector('.user-profile-sm .avatar');
+       
+       if (userProfileName) userProfileName.innerText = u.name;
+       if (userProfileEmail) userProfileEmail.innerText = u.email;
+       if (userProfileAvatar) userProfileAvatar.innerText = u.avatar;
+       
+       // Handle RBAC UI logic
+       if (userRole === 'employee') {
+          // Hide settings and directory for employees
+          const settingsNav = Array.from(document.querySelectorAll('.nav-item')).find(el => el.innerText.includes('Settings'));
+          if (settingsNav) settingsNav.style.display = 'none';
+          
+          const uploadBtn = document.querySelector('.btn-primary[onclick*="excel-upload"]');
+          if (uploadBtn) uploadBtn.style.display = 'none';
+       }
+    } catch(e) {}
 
     try {
       const configRes = await apiFetch('/api/admin/config');
@@ -259,6 +371,26 @@ async function initRealtime() {
 }
 
 let activeMatrixFilter = null;
+
+/**
+ * Central attendance status parser.
+ * In this Excel: blank = Present, Late(...) = Late, WFH = WFH,
+ * Sick/Absent/Casual/Leave = Absent, Friday/Saturday = Weekend (skip).
+ * Returns: 'P' | 'L' | 'A' | 'WFH' | 'WEEKEND' | ''
+ */
+function getStatus(rawVal) {
+  const v = String(rawVal || '').trim().toUpperCase();
+  if (v === 'FRIDAY' || v === 'SATURDAY') return 'WEEKEND';
+  if (v === 'WFH') return 'WFH';
+  if (v === 'L' || v === 'LATE' || v.startsWith('LATE(') || v.startsWith('LATE ')) return 'L';
+  if (v === 'P' || v === 'PRESENT') return 'P';
+  if (v === 'A' || v === 'ABSENT' || v.startsWith('SICK') || v.startsWith('CASUAL') ||
+      v.includes('LEAVE') || v.includes('SICK')) return 'A';
+  // Blank = Present (employee was present but not marked with a status code)
+  if (!v || v === '-') return 'P';
+  // Anything else (picnic day, early leave, etc.) treat as other absent-type
+  return 'A';
+}
 
 function filterByStatus(status) {
   // If clicking same status, clear it
@@ -318,15 +450,21 @@ function renderLocalDashboard(data) {
   renderMatrix(targetSheet, currentMonth);
 
   // ... (rest of the stats calculation remains the same)
+  // Use last date column available (most recent day) for today's stats
   let p = 0, l = 0, a = 0;
-  rows.forEach(r => {
-    for (let h of headers) {
-      const val = String(r[h] || '').toUpperCase();
-      if (val === 'P' || val === 'PRESENT') { p++; break; }
-      if (val === 'L' || val === 'LATE') { l++; break; }
-      if (val === 'A' || val === 'ABSENT') { a++; break; }
-    }
-  });
+  // Find the rightmost date column that has at least some data
+  const dateCols = headers.slice(2);
+  const lastFilledCol = [...dateCols].reverse().find(h =>
+    rows.some(r => { const s = getStatus(r[h]); return s !== '' && s !== 'WEEKEND'; })
+  ) || dateCols[dateCols.length - 1];
+  if (lastFilledCol) {
+    rows.forEach(r => {
+      const s = getStatus(r[lastFilledCol]);
+      if (s === 'P' || s === 'WFH') p++;
+      else if (s === 'L') l++;
+      else if (s === 'A') a++;
+    });
+  }
 
   const pPct = n => total > 0 ? `${Math.round(n / total * 100)}% of total` : '—';
   const rate = total > 0 ? `${Math.round(p / total * 100)}%` : '—';
@@ -392,11 +530,12 @@ function renderMatrix(sheet, monthName) {
       let cls = '';
       let isMatch = false;
 
-      if (v === 'P' || v === 'PRESENT') { cls = 'badge-P'; if (activeMatrixFilter === 'P') isMatch = true; }
-      else if (v.includes('LATE') || v === 'L') { cls = 'badge-L'; if (activeMatrixFilter === 'L') isMatch = true; }
-      else if (v.includes('SICK') || v === 'A' || v === 'ABSENT') { cls = 'badge-A'; if (activeMatrixFilter === 'A') isMatch = true; }
-      else if (v === 'WFH') { cls = 'badge-WFH'; if (activeMatrixFilter === 'WFH') isMatch = true; }
-      else if (v === 'CL' || v.includes('CASUAL')) { cls = 'badge-WFH'; if (activeMatrixFilter === 'CL') isMatch = true; }
+      const st = getStatus(rawV);
+      if (st === 'P') { cls = 'badge-P'; if (activeMatrixFilter === 'P') isMatch = true; }
+      else if (st === 'L') { cls = 'badge-L'; if (activeMatrixFilter === 'L') isMatch = true; }
+      else if (st === 'A') { cls = 'badge-A'; if (activeMatrixFilter === 'A') isMatch = true; }
+      else if (st === 'WFH') { cls = 'badge-WFH'; if (activeMatrixFilter === 'WFH') isMatch = true; }
+      else if (st === 'WEEKEND') { cls = 'badge-WFH'; }
 
       if (isMatch) filterCount++;
 
@@ -483,6 +622,15 @@ function renderEmployeeList(filter) {
       <div><div class="emp-list-name">${fullName}</div><div class="emp-list-id">ID: ${id}</div></div>
     </div>`;
   }).join('');
+  
+  // Auto-select first employee if none is active to keep details populated
+  if (emps.length && !STATE.currentProfile) {
+    const first = emps[0];
+    const id = String(first[slCol] || '');
+    const name = String(first[nameCol] || '');
+    const safeName = name.replace(/'/g, "\\'");
+    viewEmployeeProfile(id, safeName, true);
+  }
 }
 
 window.filterEmpList = function(val) { renderEmployeeList(val); };
@@ -548,16 +696,15 @@ window.viewEmployeeProfile = function (sl, name, autoUpdate) {
       if (row) {
         sheet.headers.slice(2).forEach(date => {
           const raw = row[date] || '';
-          const v   = String(raw).toUpperCase();
-          if (!v || v === 'FRIDAY' || v === 'SATURDAY') return;
+          const st = getStatus(raw);
+          if (st === 'WEEKEND') return;
           total++;
-          let badge = '';
-          if (v === 'P' || v === 'PRESENT')                                     { p++;   badge = 'badge-P'; }
-          else if (v === 'WFH')                                                   { wfh++; badge = 'badge-WFH'; }
-          else if (v.includes('LATE') || v === 'L')                              { l++;   badge = 'badge-L'; }
-          else if (v.includes('SICK')||v==='A'||v==='ABSENT'||v.includes('CASUAL')||v.includes('LEAVE')) { a++; badge = 'badge-A'; }
-          else { total--; }
-          if (badge) historyHtml += `<tr><td style="color:var(--text-muted);font-size:0.82rem">${date}</td><td><span class="badge ${badge}">${raw}</span></td></tr>`;
+          let badge = '', displayText = '';
+          if (st === 'P')       { p++;   badge = 'badge-P';   displayText = raw || 'Present'; }
+          else if (st === 'WFH') { wfh++; badge = 'badge-WFH'; displayText = 'WFH'; }
+          else if (st === 'L')   { l++;   badge = 'badge-L';   displayText = raw; }
+          else if (st === 'A')   { a++;   badge = 'badge-A';   displayText = raw || 'Absent'; }
+          if (badge) historyHtml += `<tr><td style="color:var(--text-muted);font-size:0.82rem">${date}</td><td><span class="badge ${badge}" style="font-size:0.72rem;max-width:160px;overflow:hidden;text-overflow:ellipsis;display:inline-block;white-space:nowrap;" title="${displayText}">${displayText}</span></td></tr>`;
         });
       }
     }
@@ -595,107 +742,116 @@ window.hideAddEmployeeModal = function() {
   if (modal) modal.style.display = 'none';
 };
 
-window.submitAddEmployee = function() {
-  const id = document.getElementById('add-emp-id').value.trim();
+window.submitAddEmployee = async function() {
   const name = document.getElementById('add-emp-name').value.trim();
 
-  if (!id || !name) {
-    return alert('Please enter both an Employee ID and a Full Name.');
+  if (!name) {
+    return alert('Please enter a Full Name.');
   }
 
   if (!STATE.data || !STATE.data.sheets) {
     return alert('No sheet data loaded. Please upload an Excel sheet first.');
   }
 
-  // Get active sheet
-  const sheetNames = Object.keys(STATE.data.sheets);
-  const ds = document.querySelector('.date-selector');
-  let active = ds ? ds.value : '';
-  if (!sheetNames.includes(active)) {
-    active = sheetNames.find(n => n.toLowerCase() !== 'leave list' && STATE.data.sheets[n].rows.length > 0) || sheetNames[0];
+  try {
+    const token = localStorage.getItem('token') || '';
+    const res = await fetch('http://localhost:3000/api/localfile/employee', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+      body: JSON.stringify({ name })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to add employee');
+
+    hideAddEmployeeModal();
+    alert(`✅ Employee "${name}" added successfully!`);
+
+    // Reload the data locally to show the change
+    setTimeout(() => {
+      fetch('http://localhost:3000/api/localfile/refresh', { 
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` }
+      }).catch(console.error);
+    }, 600);
+
+  } catch (err) {
+    alert(err.message);
   }
-
-  const sheet = STATE.data.sheets[active];
-  if (!sheet) return;
-
-  const slCol = sheet.headers[0];
-  const nameCol = sheet.headers[1];
-
-  // Check if ID already exists
-  const exists = sheet.rows.some(r => String(r[slCol]) === String(id));
-  if (exists) {
-    return alert(`An employee with ID "${id}" already exists in this sheet.`);
-  }
-
-  // Create new row
-  const newRow = { _rowIndex: sheet.rows.length + 1 };
-  sheet.headers.forEach(h => {
-    newRow[h] = '';
-  });
-  newRow[slCol] = id;
-  newRow[nameCol] = name;
-
-  // Add weekdays default as P
-  sheet.headers.slice(2).forEach(date => {
-    const dUpper = date.toUpperCase();
-    if (dUpper.includes('FRI') || dUpper.includes('FRIDAY')) {
-      newRow[date] = 'Friday';
-    } else if (dUpper.includes('SAT') || dUpper.includes('SATURDAY')) {
-      newRow[date] = 'Saturday';
-    } else {
-      newRow[date] = '-';
-    }
-  });
-
-  sheet.rows.push(newRow);
-  hideAddEmployeeModal();
-  renderLocalDashboard(STATE.data);
-  renderEmployeeList();
-  
-  // Select the newly added employee profile
-  viewEmployeeProfile(id, name);
-  alert(`✅ Employee "${name}" (ID: ${id}) added successfully!`);
 };
 
-window.deleteEmployee = function() {
+window.deleteEmployee = async function() {
   if (!STATE.currentProfile) return;
   const { sl, name } = STATE.currentProfile;
-
-  if (!confirm(`Are you sure you want to remove employee "${name}" (ID: ${sl}) from the database?`)) {
+  
+  if (!confirm(`Are you sure you want to completely remove ${name} (ID: ${sl}) from the system? This action cannot be undone.`)) {
     return;
   }
 
-  const sheetNames = Object.keys(STATE.data.sheets);
-  const ds = document.querySelector('.date-selector');
-  let active = ds ? ds.value : '';
-  if (!sheetNames.includes(active)) {
-    active = sheetNames.find(n => n.toLowerCase() !== 'leave list' && STATE.data.sheets[n].rows.length > 0) || sheetNames[0];
+  try {
+    const token = localStorage.getItem('token') || '';
+    const res = await fetch(`http://localhost:3000/api/localfile/employee/${sl}`, {
+      method: 'DELETE',
+      headers: { 'Authorization': `Bearer ${token}` }
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to delete employee');
+
+    alert(`🗑️ Employee "${name}" deleted successfully.`);
+
+    // Hide profile panel since employee is gone
+    document.getElementById('emp-profile-content').style.display = 'none';
+    document.getElementById('emp-empty-state').style.display = 'flex';
+    STATE.currentProfile = null;
+
+    // Reload the data
+    setTimeout(() => {
+      fetch('http://localhost:3000/api/localfile/refresh', { 
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` }
+      }).catch(console.error);
+    }, 600);
+
+  } catch (err) {
+    alert(err.message);
   }
+};
 
-  const sheet = STATE.data.sheets[active];
-  if (!sheet) return;
+window.editEmployeeName = async function() {
+  if (!STATE.currentProfile) return;
+  const { sl, name } = STATE.currentProfile;
 
-  const slCol = sheet.headers[0];
-  const originalLength = sheet.rows.length;
-  sheet.rows = sheet.rows.filter(r => String(r[slCol]) !== String(sl));
+  const newName = prompt(`Enter new name for ${name} (ID: ${sl}):`, name);
+  if (!newName || !newName.trim() || newName.trim() === name) return;
 
-  if (sheet.rows.length === originalLength) {
-    return alert('Could not find employee row to delete.');
+  try {
+    const token = localStorage.getItem('token') || '';
+    const res = await fetch(`http://localhost:3000/api/localfile/employee/${sl}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+      body: JSON.stringify({ name: newName.trim() })
+    });
+    const data = await res.json();
+
+    if (!res.ok) throw new Error(data.error || 'Failed to update employee name');
+
+    // Update in frontend memory so it reflects instantly before WS reload
+    if (STATE.currentProfile && String(STATE.currentProfile.sl) === String(sl)) {
+      STATE.currentProfile.name = newName.trim();
+      const nameEl = document.getElementById('prof-name');
+      if (nameEl) nameEl.textContent = newName.trim();
+    }
+    
+    // Trigger standard reload pipeline
+    setTimeout(() => {
+      fetch('http://localhost:3000/api/localfile/refresh', { 
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` }
+      }).catch(console.error);
+    }, 600);
+
+  } catch (err) {
+    alert(err.message);
   }
-
-  // Remove avatar from localStorage
-  localStorage.removeItem('avatar-' + sl);
-
-  // Clear current profile state
-  STATE.currentProfile = null;
-  const emptyState = document.getElementById('emp-empty-state');
-  const content    = document.getElementById('emp-profile-content');
-  if (emptyState) emptyState.style.display = 'block';
-  if (content)    content.style.display = 'none';
-
-  renderLocalDashboard(STATE.data);
-  renderEmployeeList();
-  alert(`🗑️ Employee "${name}" removed successfully.`);
 };
 
 window.handleAvatarUpload = function(event) {
@@ -816,11 +972,11 @@ window.renderCalendar = function() {
     if (rows.length > 0) {
       const empRow = rows[0];
       headers.slice(2).forEach(h => {
-        const val = String(empRow[h] || '').toUpperCase();
-        if (val === 'P' || val === 'PRESENT') monthlyP++;
-        else if (val === 'WFH') monthlyW++;
-        else if (val.includes('LATE') || val === 'L') monthlyL++;
-        else if (val.includes('SICK') || val === 'A' || val === 'ABSENT' || val.includes('LEAVE') || val.includes('CASUAL')) monthlyA++;
+        const s = getStatus(empRow[h]);
+        if (s === 'P')       monthlyP++;
+        else if (s === 'WFH') monthlyW++;
+        else if (s === 'L')   monthlyL++;
+        else if (s === 'A')   monthlyA++;
       });
     }
   }
@@ -833,8 +989,22 @@ window.renderCalendar = function() {
   }
 
   const monthNames = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
-  const monthIdx = monthNames.indexOf(activeMonth);
-  const year = CALENDAR_STATE.year;
+  // Try exact match first, then case-insensitive, then partial match
+  let monthIdx = monthNames.indexOf(activeMonth);
+  if (monthIdx === -1) {
+    monthIdx = monthNames.findIndex(m => m.toLowerCase() === activeMonth.toLowerCase());
+  }
+  if (monthIdx === -1) {
+    monthIdx = monthNames.findIndex(m => activeMonth.toLowerCase().includes(m.toLowerCase()) || m.toLowerCase().includes(activeMonth.toLowerCase()));
+  }
+  // Last resort: use current real month so we at least render something
+  if (monthIdx === -1) {
+    monthIdx = new Date().getMonth();
+  }
+  const year = CALENDAR_STATE.year || new Date().getFullYear();
+  // Update year badge in the UI
+  const yearBadge = document.getElementById('cal-year-badge');
+  if (yearBadge) yearBadge.textContent = year;
 
   const totalDays = new Date(year, monthIdx + 1, 0).getDate();
   const startDayOfWeek = new Date(year, monthIdx, 1).getDay();
@@ -883,11 +1053,12 @@ window.renderCalendar = function() {
     if (dateHeader && rows.length > 0) {
       hasRecord = true;
       rows.forEach(r => {
-        const val = String(r[dateHeader] || '').toUpperCase();
-        if (val === 'P' || val === 'PRESENT') p++;
-        else if (val === 'WFH') w++;
-        else if (val.includes('LATE') || val === 'L') l++;
-        else if (val.includes('SICK') || val === 'A' || val === 'ABSENT' || val.includes('LEAVE') || val.includes('CASUAL')) a++;
+        const s = getStatus(r[dateHeader]);
+        if (s === 'P')        p++;
+        else if (s === 'WFH') w++;
+        else if (s === 'L')   l++;
+        else if (s === 'A')   a++;
+        // WEEKEND is skipped
       });
     }
 
@@ -974,13 +1145,13 @@ window.selectCalendarDate = function(day, headerName, skipHighlightRefresh) {
   }
 
   let p = 0, l = 0, a = 0, w = 0;
-  
+
   rows.forEach(r => {
-    const val = String(r[headerName] || '').toUpperCase();
-    if (val === 'P' || val === 'PRESENT') p++;
-    else if (val === 'WFH') w++;
-    else if (val.includes('LATE') || val === 'L') l++;
-    else if (val.includes('SICK') || val === 'A' || val === 'ABSENT' || val.includes('LEAVE') || val.includes('CASUAL')) a++;
+    const s = getStatus(r[headerName]);
+    if (s === 'P')        p++;
+    else if (s === 'WFH') w++;
+    else if (s === 'L')   l++;
+    else if (s === 'A')   a++;
   });
 
   setVal('cal-stat-p', p);
@@ -1029,11 +1200,12 @@ window.renderCalendarLogsTable = function() {
     let badge = 'badge-A';
     let statusText = rawVal || 'Absent';
     
-    if (v === 'P' || v === 'PRESENT') { badge = 'badge-P'; statusText = 'Present'; }
-    else if (v === 'WFH') { badge = 'badge-WFH'; statusText = 'WFH'; }
-    else if (v.includes('LATE') || v === 'L') { badge = 'badge-L'; statusText = rawVal; }
-    else if (v === 'FRIDAY' || v === 'SATURDAY') { badge = 'badge-WFH'; statusText = rawVal; }
-    else if (!rawVal || rawVal === '-') { statusText = 'No Record'; badge = 'badge-L'; }
+    const st = getStatus(rawVal);
+    if (st === 'P')       { badge = 'badge-P';   statusText = rawVal || 'Present'; }
+    else if (st === 'WFH')    { badge = 'badge-WFH'; statusText = 'WFH'; }
+    else if (st === 'L')      { badge = 'badge-L';   statusText = rawVal; }
+    else if (st === 'A')      { badge = 'badge-A';   statusText = rawVal || 'Absent'; }
+    else if (st === 'WEEKEND'){ badge = 'badge-WFH'; statusText = rawVal; }
 
     const safeName = name.replace(/'/g,'&#39;');
     return `
@@ -1076,13 +1248,13 @@ function calcEmpStats(row, headers) {
   let p = 0, l = 0, a = 0, wfh = 0, total = 0, lastStatus = '';
   headers.slice(2).forEach(h => {
     const raw = row[h] || '';
-    const v = String(raw).toUpperCase();
-    if (!v || v === 'FRIDAY' || v === 'SATURDAY') return;
+    const st = getStatus(raw);
+    if (st === 'WEEKEND') return;
     total++;
-    if      (v === 'P' || v === 'PRESENT')                                    { p++;   lastStatus = 'present'; }
-    else if (v === 'WFH')                                                      { wfh++; lastStatus = 'wfh'; }
-    else if (v.includes('LATE') || v === 'L')                                  { l++;   lastStatus = 'late'; }
-    else if (v.includes('SICK')||v==='A'||v==='ABSENT'||v.includes('LEAVE')||v.includes('CASUAL')) { a++; lastStatus = 'absent'; }
+    if      (st === 'P')   { p++;   lastStatus = 'present'; }
+    else if (st === 'WFH') { wfh++; lastStatus = 'wfh'; }
+    else if (st === 'L')   { l++;   lastStatus = 'late'; }
+    else if (st === 'A')   { a++;   lastStatus = 'absent'; }
     else total--;
   });
   const rate = total > 0 ? Math.round((p + wfh) / total * 100) : 0;
@@ -1381,6 +1553,16 @@ window.removeEmployee = async function(id, name) {
     // Remove from UI immediately to feel snappy
     DIR.allEmps = DIR.allEmps.filter(e => e.id !== id);
     _renderDirPage();
+
+    // Clear active profile panel if this employee was being viewed
+    if (STATE.currentProfile && String(STATE.currentProfile.sl) === String(id)) {
+      STATE.currentProfile = null;
+      const emptyState = document.getElementById('emp-empty-state');
+      const content    = document.getElementById('emp-profile-content');
+      if (emptyState) emptyState.style.display = 'block';
+      if (content)    content.style.display = 'none';
+      renderEmployeeList();
+    }
 
   } catch (err) {
     alert(err.message);
