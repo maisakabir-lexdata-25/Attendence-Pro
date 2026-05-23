@@ -1,26 +1,49 @@
-@import "tailwindcss";
+@import 'tailwindcss';
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
+@theme {
+  --color-bg: #070B14;
+  --color-card-bg: rgba(15, 23, 42, 0.6);
+  --color-card-border: rgba(255, 255, 255, 0.05);
+  --color-text-main: #F8FAFC;
+  --color-text-muted: #94A3B8;
+  --color-purple: #8B5CF6;
+  --color-blue: #3B82F6;
+  --color-green: #22C55E;
+  --color-yellow: #EAB308;
+  --color-red: #EF4444;
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+@layer base {
+  body {
+    @apply bg-[var(--color-bg)] text-[var(--color-text-main)] min-h-screen overflow-hidden;
+    font-family: 'Inter', sans-serif;
   }
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+/* Scrollbar */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 10px; }
+
+/* Custom utility classes from the original CSS */
+@layer components {
+  .btn-primary {
+    @apply px-4 py-2 bg-gradient-to-r from-[var(--color-purple)] to-[var(--color-blue)] text-white font-semibold rounded-[8px] cursor-pointer shadow-[0_0_15px_rgba(139,92,246,0.3)] transition-all duration-300 hover:shadow-[0_0_20px_rgba(139,92,246,0.5)] hover:-translate-y-0.5 border-none outline-none;
+  }
+  
+  .btn-outline {
+    @apply px-4 py-2 bg-transparent text-[var(--color-text-main)] font-semibold rounded-[8px] cursor-pointer border border-solid border-[rgba(255,255,255,0.1)] transition-all duration-300 hover:bg-[rgba(255,255,255,0.05)] hover:-translate-y-0.5 outline-none;
+  }
+  
+  .card {
+    @apply bg-[var(--color-card-bg)] border border-solid border-[var(--color-card-border)] rounded-[16px] p-5 backdrop-blur-[10px];
+  }
+
+  .nav-item {
+    @apply flex items-center gap-3 px-4 py-3 text-[var(--color-text-muted)] rounded-[8px] cursor-pointer transition-all duration-200 font-medium text-[0.9rem] hover:text-[var(--color-text-main)] hover:bg-[rgba(255,255,255,0.03)];
+  }
+  
+  .nav-item.active {
+    @apply bg-[rgba(139,92,246,0.1)] text-[var(--color-purple)] border-l-[3px] border-solid border-[var(--color-purple)];
+  }
 }
