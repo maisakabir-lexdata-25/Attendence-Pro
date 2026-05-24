@@ -54,7 +54,7 @@ export default function MyProfilePage() {
             <div className="card text-center"><p className="text-xs text-[var(--color-text-muted)]">Absent</p><p className="text-2xl font-bold text-[var(--color-red)] mt-1">{match.absent}</p></div>
             <div className="card text-center"><p className="text-xs text-[var(--color-text-muted)]">Rate</p><p className="text-2xl font-bold text-white mt-1">{match.rate}%</p></div>
           </div>
-          <Link href={`/dashboard/employees/${encodeURIComponent(match.id)}`} className="btn-primary py-2 px-4 text-sm self-start">
+          <Link href={`/dashboard/employees?id=${encodeURIComponent(match.id)}`} className="btn-primary py-2 px-4 text-sm self-start">
             View detailed profile
           </Link>
         </>

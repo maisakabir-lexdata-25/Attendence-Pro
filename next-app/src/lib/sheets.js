@@ -1,9 +1,9 @@
-import { google } from 'googleapis';
+import sheetsApi from '@googleapis/sheets';
 
 function getClient() {
   const key = process.env.GOOGLE_API_KEY;
   if (!key) throw new Error('GOOGLE_API_KEY is not set');
-  return google.sheets({ version: 'v4', auth: key });
+  return sheetsApi.sheets({ version: 'v4', auth: key });
 }
 
 function getSheetId() {
